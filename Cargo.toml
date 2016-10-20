@@ -1,0 +1,9 @@
+[package]
+name = "mirror-sync"
+version = "0.1.0"
+authors = ["Jordan Miner <jminer7@gmail.com>"]
+
+[dependencies]
+clear-coat = {path = "../clear-coat"}
+crossbeam = "0.2"
+itertools = "0.4"
