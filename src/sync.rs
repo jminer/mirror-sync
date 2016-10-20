@@ -12,11 +12,11 @@ use crossbeam::sync::SegQueue;
 use itertools::{Itertools, Partition};
 
 #[derive(Clone, Debug)]
-struct SyncBuilder {
+pub struct SyncBuilder {
     parallel_copies: u8,
     copy_contents_if_date_mismatched: bool,
     copy_contents_if_size_mismatched: bool,
-    copy_contents_if_contents_mismatched: bool,
+    copy_contents_if_contents_mismatched: bool, // TODO: currently ignored
     copy_created_date: bool,
     copy_modified_date: bool,
     directories: Vec<(PathBuf, PathBuf)>,
@@ -81,17 +81,17 @@ impl SyncBuilder {
 }
 
 #[derive(Debug)]
-enum SyncLogLevel {
+pub enum SyncLogLevel {
     Info,
     Debug,
     Error,
 }
 
 #[derive(Debug)]
-struct SyncLogEntry {
-    time: Instant,
-    level: SyncLogLevel,
-    message: String,
+pub struct SyncLogEntry {
+    pub time: Instant,
+    pub level: SyncLogLevel,
+    pub message: String,
 }
 
 #[derive(Debug)]
@@ -168,15 +168,23 @@ impl SyncOperation {
                     IoOperation::DeleteDirAll(ref dir) => {
                         if let Err(err) = fs::remove_dir_all(dir) {
                             self.log(SyncLogLevel::Error,
-                                     format!("Failed to delete directory {}: {}.",
+                                     format!("Failed to delete directory {}: {}",
                                      dir.to_string_lossy(), err.description()));
+                        } else {
+                            self.log(SyncLogLevel::Info,
+                                    format!("Deleted directory {}",
+                                    dir.to_string_lossy()));
                         }
                     },
                     IoOperation::DeleteFile(ref file) => {
                         if let Err(err) = fs::remove_file(file) {
                             self.log(SyncLogLevel::Error,
-                                     format!("Failed to delete file {}: {}.",
+                                     format!("Failed to delete file {}: {}",
                                      file.to_string_lossy(), err.description()));
+                        } else {
+                            self.log(SyncLogLevel::Info,
+                                    format!("Deleted file {}",
+                                    file.to_string_lossy()));
                         }
                     },
                 }
@@ -241,7 +249,7 @@ impl SyncOperation {
             Ok(entries) => entries,
             Err(err) => {
                 self.log(SyncLogLevel::Error,
-                         format!("Failed to get the list of files in {}: {}.",
+                         format!("Failed to get the list of files in {}: {}",
                          dest_dir.to_string_lossy(), err.description()));
                 return;
             },
@@ -255,7 +263,7 @@ impl SyncOperation {
         );
         for err in read_dir_errors {
             self.log(SyncLogLevel::Error,
-                     format!("Failed to read the name of a file in {}: {}.",
+                     format!("Failed to read the name of a file in {}: {}",
                      dest_dir.to_string_lossy(), err.description()));
         }
 
@@ -271,15 +279,16 @@ impl SyncOperation {
                         Ok(meta) => meta,
                         Err(err) => {
                             self.log(SyncLogLevel::Error,
-                                     format!("Failed to read information about {}: {}.",
+                                     format!("Failed to read information about {}: {}",
                                      src_path.to_string_lossy(), err.description()));
                             continue;
                         },
                     };
+                    let dest_entry = dest_entries.remove(&dest_path);
                     if src_meta.is_dir() {
                         self.add_to_sync_dir_queue(src_path, dest_path);
                     } else if src_meta.is_file() {
-                        let dest_meta = dest_entries.remove(&dest_path).map(|entry|
+                        let dest_meta = dest_entry.map(|entry|
                             entry.metadata()
                         );
                         let should_copy = match dest_meta {
@@ -288,12 +297,33 @@ impl SyncOperation {
                                     self.add_to_op_queue(IoOperation::DeleteDirAll(dest_path.clone()));
                                     true
                                 } else if dest_meta.is_file() {
-                                    // compare len, date, contents
-                                    if self.0.options.copy_contents_if_size_mismatched &&
-                                       src_meta.len() != dest_meta.len() {
+                                    // Compare the modified date and size, depending on settings.
+                                    let src_modified = match src_meta.modified() {
+                                        Ok(modified) => modified,
+                                        Err(err) => {
+                                            self.log(SyncLogLevel::Error,
+                                                     format!("Failed to get modified date of {}: {}",
+                                                     src_path.to_string_lossy(), err.description()));
+                                            continue;
+                                        },
+                                    };
+                                    let dest_modified = match dest_meta.modified() {
+                                        Ok(modified) => modified,
+                                        Err(err) => {
+                                            self.log(SyncLogLevel::Error,
+                                                     format!("Failed to get modified date of {}: {}",
+                                                     dest_path.to_string_lossy(), err.description()));
+                                            continue;
+                                        },
+                                    };
+                                    if self.0.options.copy_contents_if_date_mismatched &&
+                                       src_modified != dest_modified {
                                         true
-                                    } else { // TODO:
+                                    } else if self.0.options.copy_contents_if_size_mismatched &&
+                                              src_meta.len() != dest_meta.len() {
                                         true
+                                    } else {
+                                        false
                                     }
                                 } else {
                                     false // TODO: delete symlink?
@@ -302,7 +332,7 @@ impl SyncOperation {
                             Some(Err(err)) => {
                                 if err.kind() != io::ErrorKind::NotFound {
                                     self.log(SyncLogLevel::Error,
-                                             format!("Failed to read information about {}: {}.",
+                                             format!("Failed to read information about {}: {}",
                                              dest_path.to_string_lossy(), err.description()));
                                     continue;
                                 }
@@ -318,7 +348,7 @@ impl SyncOperation {
                 },
                 Err(err) => {
                     self.log(SyncLogLevel::Error,
-                             format!("Failed to read the name of a file in {}: {}.",
+                             format!("Failed to read the name of a file in {}: {}",
                              src_dir.to_string_lossy(), err.description()));
                 },
             }
@@ -330,7 +360,7 @@ impl SyncOperation {
                 Ok(dest_meta) => dest_meta,
                 Err(err) => {
                     self.log(SyncLogLevel::Error,
-                             format!("Failed to read information about {}: {}.",
+                             format!("Failed to read information about {}: {}",
                              dest_path.to_string_lossy(), err.description()));
                     continue;
                 },
@@ -348,7 +378,7 @@ impl SyncOperation {
             Ok(file) => file,
             Err(err) => {
                 self.log(SyncLogLevel::Error,
-                         format!("Failed to open {}: {}.",
+                         format!("Failed to open {}: {}",
                          src_path.to_string_lossy(), err.description()));
                 return;
             },
@@ -357,14 +387,15 @@ impl SyncOperation {
             Ok(file) => file,
             Err(err) => {
                 self.log(SyncLogLevel::Error,
-                         format!("Failed to open {}: {}.",
+                         format!("Failed to open {}: {}",
                          dest_path.to_string_lossy(), err.description()));
                 return;
             },
         };
+        self.log(SyncLogLevel::Info, format!("Starting to copy {}", src_path.to_string_lossy()));
         if let Err(err) = io::copy(&mut src_file, &mut dest_file) {
             self.log(SyncLogLevel::Error,
-                     format!("Failed to copy {}: {}.",
+                     format!("Failed to copy {}: {}",
                      src_path.to_string_lossy(), err.description()));
         }
     }
