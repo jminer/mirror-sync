@@ -5,10 +5,17 @@
 extern crate clear_coat;
 extern crate crossbeam;
 extern crate itertools;
+#[cfg(windows)]
+extern crate winapi;
+#[cfg(windows)]
+extern crate kernel32;
 
 use clear_coat::*;
 use clear_coat::common_attrs_cbs::*;
 
+
+#[cfg_attr(windows, path = "windows_file_times.rs")]
+mod file_times;
 mod sync;
 
 fn create_job_page() -> Box<Control> {
