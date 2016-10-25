@@ -1,6 +1,7 @@
 
 use std::collections::HashMap;
 use std::error::Error;
+use std::fmt::{self, Debug};
 use std::fs::{self, File};
 use std::io;
 use std::path::{PathBuf, Path};
@@ -11,7 +12,7 @@ use crossbeam;
 use crossbeam::sync::SegQueue;
 use itertools::{Itertools, Partition};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SyncBuilder {
     parallel_copies: u8,
     copy_contents_if_date_mismatched: bool,
@@ -20,6 +21,7 @@ pub struct SyncBuilder {
     copy_created_date: bool,
     copy_modified_date: bool,
     directories: Vec<(PathBuf, PathBuf)>,
+    filter: Option<Arc<Fn(&Path) -> bool + Send + Sync>>,
 }
 
 impl SyncBuilder {
@@ -32,6 +34,7 @@ impl SyncBuilder {
             copy_created_date: true,
             copy_modified_date: true,
             directories: vec![],
+            filter: None,
         }
     }
 
@@ -70,6 +73,17 @@ impl SyncBuilder {
         self
     }
 
+    /// Adds a filter that will be passed the path to each file and directory in the source
+    /// before it is copied. If the function returns true, then the file/directory will be synced
+    /// normally. If it returns false, it will be as if the file/directory does not exist. It will
+    /// not be copied and will be deleted if it exists in the destination.
+    pub fn filter<F: Fn(&Path) -> bool + 'static + Send + Sync>(&mut self, f: F) -> &mut Self {
+        // I'd kind of like to not have the closure be 'static, but then a lifetime parameter infects
+        // SyncBuilder and SyncOperation.
+        self.filter = Some(Arc::new(f));
+        self
+    }
+
     pub fn sync(&mut self) -> SyncOperation {
         let op = SyncOperation::new(&self);
         {
@@ -77,6 +91,22 @@ impl SyncBuilder {
             thread::spawn(move || op.run());
         }
         op
+    }
+}
+
+impl Debug for SyncBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let filter_opt = self.filter.as_ref().map(|_| "closure");
+        f.debug_struct("SyncBuilder")
+            .field("parallel_copies", &self.parallel_copies)
+            .field("copy_contents_if_date_mismatched", &self.copy_contents_if_date_mismatched)
+            .field("copy_contents_if_size_mismatched", &self.copy_contents_if_size_mismatched)
+            .field("copy_contents_if_contents_mismatched", &self.copy_contents_if_contents_mismatched)
+            .field("copy_created_date", &self.copy_created_date)
+            .field("copy_modified_date", &self.copy_modified_date)
+            .field("directories", &self.directories)
+            .field("filter", &filter_opt)
+            .finish()
     }
 }
 
@@ -274,6 +304,12 @@ impl SyncOperation {
             match src_entry_result {
                 Ok(src_entry) => {
                     let src_path = src_entry.path();
+                    // If the filter returns false, skip the file, like it doesn't exist.
+                    if !self.0.options.filter.as_ref().map_or(true, |f| f(&src_path)) {
+                        self.log(SyncLogLevel::Info,
+                                 format!("Skipping file {}", src_path.to_string_lossy()));
+                        continue;
+                    }
                     let dest_path = dest_dir.join(src_entry.file_name());
                     let src_meta = match src_entry.metadata() {
                         Ok(meta) => meta,
