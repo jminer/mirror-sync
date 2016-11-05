@@ -12,7 +12,7 @@ extern crate kernel32;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -133,6 +133,25 @@ impl MainWindow {
 }
 
 fn main() {
+    // let op = SyncBuilder::new()
+    //          .parallel_copies(1)
+    //          .add_directory_pair(PathBuf::from(r"C:\Files"), PathBuf::from(r"D:\Backup"))
+    //          .filter(|path| path != Path::new(r"C:\Files\Dev"))
+    //          .sync();
+    // let op = SyncBuilder::new()
+    //          .parallel_copies(10)
+    //          .add_directory_pair(PathBuf::from(r"C:\Songs"), PathBuf::from(r"\\SHINYONE\Users\Dan\Music\Songs"))
+    //          .add_directory_pair(PathBuf::from(r"C:\Songs DL"), PathBuf::from(r"\\SHINYONE\Users\Dan\Music\Songs DL"))
+    //          .filter(|path| path.extension().map_or(true, |ext| ext != "wav"))
+    //          .sync();
+    // while !op.is_done() {
+    //     while let Some(entry) = op.read_log() {
+    //         println!("{:?} {:?} {}", entry.time, entry.level, entry.message);
+    //     }
+    //     thread::sleep(Duration::from_millis(100));
+    // }
+    // return;
+
     let win = MainWindow::new();
     win.dialog().show_xy(ScreenPosition::Center, ScreenPosition::Center)
                 .expect("failed to show the window");
