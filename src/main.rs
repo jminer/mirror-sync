@@ -44,6 +44,8 @@ struct MainWindowData {
     job_page: JobPageData,
 }
 
+const NAME_VISIBLE_COLUMNS: u32 = 15;
+
 #[derive(Clone)]
 struct MainWindow(Rc<MainWindowData>);
 
@@ -54,7 +56,7 @@ impl MainWindow {
         let job_list_label = Label::with_title("Jobs");
         let job_list = List::new();
         job_list.set_expand(Expand::Vertical);
-        job_list.set_visible_columns(15);
+        job_list.set_visible_columns(NAME_VISIBLE_COLUMNS);
         let add_job_button = Button::with_title("Add");
         let delete_job_button = Button::with_title("Delete");
 
@@ -77,34 +79,48 @@ impl MainWindow {
         dialog.append(&main_page).expect("failed to build the window");
         dialog.set_title("Mirror Sync");
 
-        let main_window = MainWindow(Rc::new(MainWindowData {
+        let main_window_zyg = MainWindow(Rc::new(MainWindowData {
             jobs: RefCell::new(vec![]),
             dialog: dialog,
             job_list: job_list,
             job_page: job_page,
         }));
 
-        let main_window_capt = main_window.clone();
-        main_window.0.job_list.action_event().add(move |_: &ListActionArgs| main_window_capt.update_job_page());
-        let main_window_capt = main_window.clone();
-        add_job_button.action_event().add(move || main_window_capt.add_new_job());
+        let main_window = main_window_zyg.clone();
+        main_window_zyg.0.job_list.action_event().add(move |_: &ListActionArgs|
+            main_window.update_job_page()
+        );
+        let main_window = main_window_zyg.clone();
+        add_job_button.action_event().add(move || main_window.add_new_job());
 
-        let main_window_capt = main_window.clone();
-        main_window.0.job_page.name_text_box.value_changed_event().add(move ||
-            if let Some(sel_index) = main_window_capt.0.job_list.value_single() {
+        let main_window = main_window_zyg.clone();
+        main_window_zyg.0.job_page.name_text_box.value_changed_event().add(move ||
+            if let Some(sel_index) = main_window.0.job_list.value_single() {
                 {
-                    let mut jobs = main_window_capt.0.jobs.borrow_mut();
-                    jobs[sel_index].name = main_window_capt.0.job_page.name_text_box.value();
+                    let mut jobs = main_window.0.jobs.borrow_mut();
+                    jobs[sel_index].name = main_window.0.job_page.name_text_box.value();
                 }
-                main_window_capt.update_job_list();
+                main_window.update_job_list();
             }
         );
 
-        main_window
+        let main_window = main_window_zyg.clone();
+        main_window_zyg.0.job_page.parallel_copies_text_box.value_changed_event().add(move ||
+            if let Some(sel_index) = main_window.0.job_list.value_single() {
+                let mut jobs = main_window.0.jobs.borrow_mut();
+                let parallel_str = main_window.0.job_page.parallel_copies_text_box.value();
+                if let Ok(parallel_copies) = parallel_str.parse::<u8>() {
+                    jobs[sel_index].parallel_copies = parallel_copies;
+                }
+            }
+        );
+
+        main_window_zyg
     }
 
     fn create_job_page() -> JobPageData {
         let name_text_box = Text::new();
+        name_text_box.set_visible_columns(NAME_VISIBLE_COLUMNS);
         let parallel_copies_text_box = Text::new();
 
         let copy_if_size_mismatched_checkbox = Toggle::new();
@@ -128,20 +144,41 @@ impl MainWindow {
         folder_list.set_visible_columns(20);
         folder_list.set_visible_lines(5);
 
+        let source_dir_text_box = Text::new();
+        source_dir_text_box.set_expand(Expand::Horizontal);
+        let dest_dir_text_box = Text::new();
+        dest_dir_text_box.set_expand(Expand::Horizontal);
+        let add_dirs_button = Button::with_title("Add");
+        let delete_dirs_button = Button::with_title("Delete");
+
+        let blacklist_text_box = Text::new();
+        let blacklist_add_button = Button::with_title("Add");
+        let blacklist_delete_button = Button::with_title("Delete");
+
         let blacklist = List::new();
         blacklist.set_expand(Expand::Yes);
         blacklist.set_visible_columns(20);
 
+        let dirs_grid = grid_box!(
+            &Label::with_title("Source:"), &source_dir_text_box,
+            &Label::with_title("Destination:"), &dest_dir_text_box,
+        );
+        dirs_grid.set_num_div(NumDiv::Fixed(2)).fit_all_to_children();
+
         let page = vbox!(
             hbox!(&Label::with_title("Name:"), &name_text_box),
-            hbox!(&Label::with_title("Parallel Jobs:"), &parallel_copies_text_box),
+            hbox!(&Label::with_title("Parallel jobs:"), &parallel_copies_text_box),
             &Label::with_title("Copy file contents if"),
             hbox!(copy_if_size_mismatched_indent, &copy_if_size_mismatched_checkbox),
             hbox!(copy_if_modified_mismatched_indent, &copy_if_modified_mismatched_checkbox),
             &copy_created_checkbox,
             &copy_modified_checkbox,
             hbox!(
-                vbox!(&Label::with_title("Folders"), &folder_list),
+                vbox!(
+                    &Label::with_title("Folders"), &folder_list,
+                    dirs_grid,
+                    hbox!(fill!(), &add_dirs_button, &delete_dirs_button),
+                ),
                 vbox!(&Label::with_title("Blacklist"), &blacklist),
             ),
         );
