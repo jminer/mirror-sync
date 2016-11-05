@@ -32,7 +32,8 @@ struct Job {
 
 struct JobPageData {
     control: Vbox,
-    parallel_jobs_text_box: Text,
+    name_text_box: Text,
+    parallel_copies_text_box: Text,
 }
 
 struct MainWindowData {
@@ -52,6 +53,8 @@ impl MainWindow {
 
         let job_list_label = Label::with_title("Jobs");
         let job_list = List::new();
+        job_list.set_expand(Expand::Vertical);
+        job_list.set_visible_columns(15);
         let add_job_button = Button::with_title("Add");
         let delete_job_button = Button::with_title("Delete");
 
@@ -70,6 +73,7 @@ impl MainWindow {
                 hbox!(fill!(),&sync_button),
             ),
         );
+        main_page.set_top_level_margin_and_gap();
         dialog.append(&main_page).expect("failed to build the window");
         dialog.set_title("Mirror Sync");
 
@@ -85,26 +89,66 @@ impl MainWindow {
         let main_window_capt = main_window.clone();
         add_job_button.action_event().add(move || main_window_capt.add_new_job());
 
+        let main_window_capt = main_window.clone();
+        main_window.0.job_page.name_text_box.value_changed_event().add(move ||
+            if let Some(sel_index) = main_window_capt.0.job_list.value_single() {
+                {
+                    let mut jobs = main_window_capt.0.jobs.borrow_mut();
+                    jobs[sel_index].name = main_window_capt.0.job_page.name_text_box.value();
+                }
+                main_window_capt.update_job_list();
+            }
+        );
+
         main_window
     }
 
     fn create_job_page() -> JobPageData {
-        let parallel_jobs_text_box = Text::new();
+        let name_text_box = Text::new();
+        let parallel_copies_text_box = Text::new();
+
+        let copy_if_size_mismatched_checkbox = Toggle::new();
+        copy_if_size_mismatched_checkbox.set_title("Size mismatched");
+        let copy_if_size_mismatched_indent = Label::new();
+        copy_if_size_mismatched_indent.set_min_size(10, 0);
+
+        let copy_if_modified_mismatched_checkbox = Toggle::new();
+        copy_if_modified_mismatched_checkbox.set_title("Date modified mismatched");
+        let copy_if_modified_mismatched_indent = Label::new();
+        copy_if_modified_mismatched_indent.set_min_size(10, 0);
+
+        let copy_created_checkbox = Toggle::new();
+        copy_created_checkbox.set_title("Copy created date");
+
+        let copy_modified_checkbox = Toggle::new();
+        copy_modified_checkbox.set_title("Copy modified date");
 
         let folder_list = List::new();
+        folder_list.set_expand(Expand::Yes);
+        folder_list.set_visible_columns(20);
+        folder_list.set_visible_lines(5);
 
         let blacklist = List::new();
+        blacklist.set_expand(Expand::Yes);
+        blacklist.set_visible_columns(20);
 
         let page = vbox!(
-            hbox!(&Label::with_title("Parallel Jobs:"), &parallel_jobs_text_box),
+            hbox!(&Label::with_title("Name:"), &name_text_box),
+            hbox!(&Label::with_title("Parallel Jobs:"), &parallel_copies_text_box),
+            &Label::with_title("Copy file contents if"),
+            hbox!(copy_if_size_mismatched_indent, &copy_if_size_mismatched_checkbox),
+            hbox!(copy_if_modified_mismatched_indent, &copy_if_modified_mismatched_checkbox),
+            &copy_created_checkbox,
+            &copy_modified_checkbox,
             hbox!(
-                vbox!(&folder_list),
-                vbox!(&blacklist),
+                vbox!(&Label::with_title("Folders"), &folder_list),
+                vbox!(&Label::with_title("Blacklist"), &blacklist),
             ),
         );
 
         JobPageData {
-            parallel_jobs_text_box: parallel_jobs_text_box,
+            name_text_box: name_text_box,
+            parallel_copies_text_box: parallel_copies_text_box,
             control: page,
         }
     }
@@ -117,18 +161,30 @@ impl MainWindow {
         let sel_index = self.0.job_list.value_single();
         if let Some(sel_index) = sel_index {
             let jobs = self.0.jobs.borrow();
-            self.0.job_page.parallel_jobs_text_box.set_value(&jobs[sel_index].parallel_copies.to_string());
+            self.0.job_page.name_text_box.set_value(&jobs[sel_index].name);
+            self.0.job_page.parallel_copies_text_box.set_value(&jobs[sel_index].parallel_copies.to_string());
         }
     }
 
-    fn add_new_job(&self) {
-        let mut jobs = self.0.jobs.borrow_mut();
-        jobs.push(Job {
-            name: "Unnamed".into(),
-            parallel_copies: 2,
-        });
+    fn update_job_list(&self) {
+        let sel_index = self.0.job_list.value_single();
+        let jobs = self.0.jobs.borrow();
         self.0.job_list.set_items(jobs.iter().map(|job| &job.name));
-        self.0.job_list.set_value_single(Some(jobs.len() - 1));
+        self.0.job_list.set_value_single(sel_index);
+    }
+
+    fn add_new_job(&self) {
+        {
+            let mut jobs = self.0.jobs.borrow_mut();
+            jobs.push(Job {
+                name: "Unnamed".into(),
+                parallel_copies: 2,
+            });
+        }
+        self.update_job_list();
+        // TODO: I hate all this RefCell borrowing. I need to figure out a pattern to reduce it.
+        self.0.job_list.set_value_single(Some(self.0.jobs.borrow().len() - 1));
+        self.update_job_page();
     }
 }
 
