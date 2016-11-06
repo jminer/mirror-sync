@@ -161,6 +161,7 @@ impl MainWindow {
         let delete_dirs_button = Button::with_title("Delete");
 
         let blacklist_text_box = Text::new();
+        blacklist_text_box.set_expand(Expand::Horizontal);
         let blacklist_add_button = Button::with_title("Add");
         let blacklist_delete_button = Button::with_title("Delete");
 
@@ -188,7 +189,11 @@ impl MainWindow {
                     dirs_grid,
                     hbox!(fill!(), &add_dirs_button, &delete_dirs_button),
                 ),
-                vbox!(&Label::with_title("Blacklist"), &blacklist),
+                vbox!(
+                    &Label::with_title("Blacklist"), &blacklist,
+                    hbox!(&Label::with_title("Filter:"), &blacklist_text_box),
+                    hbox!(fill!(), &blacklist_add_button, &blacklist_delete_button),
+                ),
             ),
         );
 
