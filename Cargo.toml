@@ -4,9 +4,12 @@ version = "0.1.0"
 authors = ["Jordan Miner <jminer7@gmail.com>"]
 
 [dependencies]
+app_dirs = "1.1"
 clear-coat = {path = "../clear-coat"}
 crossbeam = "0.2"
 itertools = "0.4"
+serde = "0.8"
+serde_json = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 winapi = "0.2"

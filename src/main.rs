@@ -3,14 +3,19 @@
 
 #[macro_use]
 extern crate clear_coat;
+
+extern crate app_dirs;
 extern crate crossbeam;
 extern crate itertools;
+extern crate serde_json;
+
 #[cfg(windows)]
 extern crate winapi;
 #[cfg(windows)]
 extern crate kernel32;
 
 use std::cell::RefCell;
+use std::fs::{self, File};
 use std::rc::Rc;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -18,6 +23,8 @@ use std::time::Duration;
 
 use clear_coat::*;
 use clear_coat::common_attrs_cbs::*;
+use serde_json::Value as JsonValue;
+use serde_json::builder::{ArrayBuilder, ObjectBuilder};
 
 use sync::SyncBuilder;
 
@@ -94,26 +101,28 @@ impl MainWindow {
         add_job_button.action_event().add(move || main_window.add_new_job());
 
         let main_window = main_window_zyg.clone();
-        main_window_zyg.0.job_page.name_text_box.value_changed_event().add(move ||
+        main_window_zyg.0.job_page.name_text_box.value_changed_event().add(move || {
             if let Some(sel_index) = main_window.0.job_list.value_single() {
                 {
                     let mut jobs = main_window.0.jobs.borrow_mut();
                     jobs[sel_index].name = main_window.0.job_page.name_text_box.value();
                 }
                 main_window.update_job_list();
-            }
-        );
+            };
+            main_window.save_jobs();
+        });
 
         let main_window = main_window_zyg.clone();
-        main_window_zyg.0.job_page.parallel_copies_text_box.value_changed_event().add(move ||
+        main_window_zyg.0.job_page.parallel_copies_text_box.value_changed_event().add(move || {
             if let Some(sel_index) = main_window.0.job_list.value_single() {
                 let mut jobs = main_window.0.jobs.borrow_mut();
                 let parallel_str = main_window.0.job_page.parallel_copies_text_box.value();
                 if let Ok(parallel_copies) = parallel_str.parse::<u8>() {
                     jobs[sel_index].parallel_copies = parallel_copies;
                 }
-            }
-        );
+            };
+            main_window.save_jobs();
+        });
 
         main_window_zyg
     }
@@ -187,6 +196,52 @@ impl MainWindow {
             name_text_box: name_text_box,
             parallel_copies_text_box: parallel_copies_text_box,
             control: page,
+        }
+    }
+
+    fn save_jobs(&self) {
+        // TODO: I should create a timer and just start it here. When the timer goes off,
+        // it actually saves the jobs.
+        let jobs = self.0.jobs.borrow();
+        let settings_dir = match app_dirs::get_data_root(app_dirs::AppDataType::UserData) {
+            Ok(dir) => dir,
+            Err(err) => {
+                println!("failed to get directory to save jobs: {}", err);
+                // TODO: should show dialog
+                return;
+            },
+        };
+        let app_settings_dir = settings_dir.join("MirrorSync");
+        if let Err(err) = fs::create_dir_all(&app_settings_dir) {
+            println!("failed to create directory to save jobs: {}", err);
+            // TODO: should show dialog
+            return;
+        }
+
+        let json = ObjectBuilder::new()
+            .insert_array("jobs", |mut builder| {
+                for job in jobs.iter() {
+                    builder = builder.push_object(|job_builder| {
+                        job_builder
+                            .insert("name", &job.name)
+                            .insert("parallel_copies", job.parallel_copies)
+                    });
+                }
+                builder
+            })
+            .build();
+        let mut file = match File::create(&app_settings_dir.join("settings.json")) {
+            Ok(file) => file,
+            Err(err) => {
+                println!("failed to create file to save jobs: {}", err);
+                // TODO: should show dialog
+                return;
+            },
+        };
+        if let Err(err) = serde_json::ser::to_writer_pretty(&mut file, &json) {
+            println!("failed to save jobs: {}", err);
+            // TODO: should show dialog
+            return;
         }
     }
 
