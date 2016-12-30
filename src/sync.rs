@@ -146,7 +146,7 @@ struct SyncOperationData {
 }
 
 #[derive(Clone)]
-struct SyncOperation(Arc<SyncOperationData>);
+pub struct SyncOperation(Arc<SyncOperationData>);
 
 impl SyncOperation {
     pub fn new(sync_builder: &SyncBuilder) -> Self {
@@ -445,6 +445,7 @@ enum IoOperation {
 }
 
 
+#[cfg(test)]
 mod tests {
     use std::env;
     use std::fs::{self, File};

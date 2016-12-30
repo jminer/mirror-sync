@@ -1,6 +1,4 @@
 
-#![feature(question_mark)]
-
 #[macro_use]
 extern crate clear_coat;
 
@@ -154,7 +152,7 @@ impl MainWindowInner {
                 builder
             })
             .build();
-        let mut file = match File::create(&app_settings_dir.join("settings.json")) {
+        let file = match File::create(&app_settings_dir.join("settings.json")) {
             Ok(file) => file,
             Err(err) => {
                 println!("failed to create file to save jobs: {}", err);
