@@ -16,6 +16,7 @@ extern crate kernel32;
 
 use std::cell::RefCell;
 use std::fs::{self, File};
+use std::io::{BufReader, BufWriter};
 use std::rc::Rc;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -35,6 +36,27 @@ mod sync;
 struct Job {
     name: String,
     parallel_copies: u8,
+    copy_contents_if_date_mismatched: bool,
+    copy_contents_if_size_mismatched: bool,
+    copy_created_date: bool,
+    copy_modified_date: bool,
+    directories: Vec<(PathBuf, PathBuf)>,
+    blacklist: Vec<PathBuf>,
+}
+
+impl Default for Job {
+    fn default() -> Self {
+        Job {
+            name: "Unnamed".into(),
+            parallel_copies: 2,
+            copy_contents_if_date_mismatched: false,
+            copy_contents_if_size_mismatched: true,
+            copy_created_date: true,
+            copy_modified_date: true,
+            directories: vec![],
+            blacklist: vec![],
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -53,6 +75,55 @@ struct MainWindowInner {
 }
 
 impl MainWindowInner {
+    fn load_jobs(&mut self) {
+        let settings_dir = match app_dirs::get_data_root(app_dirs::AppDataType::UserData) {
+            Ok(dir) => dir,
+            Err(err) => {
+                println!("failed to get directory to load jobs: {}", err);
+                // TODO: should show dialog
+                return;
+            },
+        };
+        let app_settings_dir = settings_dir.join("MirrorSync");
+
+        let file = match File::open(&app_settings_dir.join("settings.json")) {
+            Ok(file) => file,
+            Err(err) => {
+                println!("failed to open file to load jobs: {}", err);
+                // TODO: should show dialog
+                return;
+            }
+        };
+        let reader = BufReader::new(file);
+
+        let value: JsonValue = match serde_json::from_reader(reader) {
+            Ok(v) => v,
+            Err(err) => {
+                println!("failed to parse settings file as JSON: {}", err);
+                // TODO: should show dialog
+                return;
+            }
+        };
+
+        let mut jobs = vec![];
+        if let Some(&JsonValue::Array(ref jobs_arr)) = value.find("jobs") {
+            for job_obj in jobs_arr {
+                let mut job: Job = Default::default();
+                if let Some(&JsonValue::String(ref name)) = job_obj.find("name") {
+                    job.name = name.clone();
+                }
+                if let Some(parallel_copies) = job_obj.find("parallel_copies")
+                                                      .and_then(|val| val.as_u64()) {
+                    job.parallel_copies = parallel_copies as u8;
+                }
+                jobs.push(job);
+            }
+        }
+        self.jobs = jobs;
+        self.update_job_list();
+        self.update_job_page();
+    }
+
     fn save_jobs(&self) {
         // TODO: I should create a timer and just start it here. When the timer goes off,
         // it actually saves the jobs.
@@ -91,7 +162,9 @@ impl MainWindowInner {
                 return;
             },
         };
-        if let Err(err) = serde_json::ser::to_writer_pretty(&mut file, &json) {
+        let mut writer = BufWriter::new(file);
+
+        if let Err(err) = serde_json::ser::to_writer_pretty(&mut writer, &json) {
             println!("failed to save jobs: {}", err);
             // TODO: should show dialog
             return;
@@ -113,13 +186,11 @@ impl MainWindowInner {
     }
 
     fn add_new_job(&mut self) {
-        self.jobs.push(Job {
-            name: "Unnamed".into(),
-            parallel_copies: 2,
-        });
+        self.jobs.push(Default::default());
         self.update_job_list();
         self.job_list.set_value_single(Some(self.jobs.len() - 1));
         self.update_job_page();
+        self.save_jobs();
     }
 }
 
@@ -175,13 +246,24 @@ impl MainWindow {
         add_job_button.action_event().add(move || main_window.0.borrow_mut().add_new_job());
 
         let main_window = main_window_zyg.clone();
+        delete_job_button.action_event().add(move || {
+            let mut inner = main_window.0.borrow_mut();
+            if let Some(sel_index) = inner.job_list.value_single() {
+                inner.jobs.remove(sel_index);
+                inner.update_job_list();
+                inner.update_job_page();
+                inner.save_jobs();
+            }
+        });
+
+        let main_window = main_window_zyg.clone();
         job_page.name_text_box.value_changed_event().add(move || {
             let mut inner = main_window.0.borrow_mut();
             if let Some(sel_index) = inner.job_list.value_single() {
                 inner.jobs[sel_index].name = inner.job_page.name_text_box.value();
                 inner.update_job_list();
+                inner.save_jobs();
             };
-            inner.save_jobs();
         });
 
         let main_window = main_window_zyg.clone();
@@ -191,10 +273,12 @@ impl MainWindow {
                 let parallel_str = inner.job_page.parallel_copies_text_box.value();
                 if let Ok(parallel_copies) = parallel_str.parse::<u8>() {
                     inner.jobs[sel_index].parallel_copies = parallel_copies;
+                    inner.save_jobs();
                 }
-            };
-            inner.save_jobs();
+            }
         });
+
+        main_window_zyg.0.borrow_mut().load_jobs();
 
         main_window_zyg
     }
