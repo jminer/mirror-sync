@@ -37,24 +37,96 @@ struct Job {
     parallel_copies: u8,
 }
 
+#[derive(Clone)]
 struct JobPageData {
     control: Vbox,
     name_text_box: Text,
     parallel_copies_text_box: Text,
 }
 
-struct MainWindowData {
-    jobs: RefCell<Vec<Job>>,
+struct MainWindowInner {
+    jobs: Vec<Job>,
 
     dialog: Dialog,
     job_list: List,
     job_page: JobPageData,
 }
 
+impl MainWindowInner {
+    fn save_jobs(&self) {
+        // TODO: I should create a timer and just start it here. When the timer goes off,
+        // it actually saves the jobs.
+        let settings_dir = match app_dirs::get_data_root(app_dirs::AppDataType::UserData) {
+            Ok(dir) => dir,
+            Err(err) => {
+                println!("failed to get directory to save jobs: {}", err);
+                // TODO: should show dialog
+                return;
+            },
+        };
+        let app_settings_dir = settings_dir.join("MirrorSync");
+        if let Err(err) = fs::create_dir_all(&app_settings_dir) {
+            println!("failed to create directory to save jobs: {}", err);
+            // TODO: should show dialog
+            return;
+        }
+
+        let json = ObjectBuilder::new()
+            .insert_array("jobs", |mut builder| {
+                for job in self.jobs.iter() {
+                    builder = builder.push_object(|job_builder| {
+                        job_builder
+                            .insert("name", &job.name)
+                            .insert("parallel_copies", job.parallel_copies)
+                    });
+                }
+                builder
+            })
+            .build();
+        let mut file = match File::create(&app_settings_dir.join("settings.json")) {
+            Ok(file) => file,
+            Err(err) => {
+                println!("failed to create file to save jobs: {}", err);
+                // TODO: should show dialog
+                return;
+            },
+        };
+        if let Err(err) = serde_json::ser::to_writer_pretty(&mut file, &json) {
+            println!("failed to save jobs: {}", err);
+            // TODO: should show dialog
+            return;
+        }
+    }
+
+    fn update_job_page(&self) {
+        let sel_index = self.job_list.value_single();
+        if let Some(sel_index) = sel_index {
+            self.job_page.name_text_box.set_value(&self.jobs[sel_index].name);
+            self.job_page.parallel_copies_text_box.set_value(&self.jobs[sel_index].parallel_copies.to_string());
+        }
+    }
+
+    fn update_job_list(&self) {
+        let sel_index = self.job_list.value_single();
+        self.job_list.set_items(self.jobs.iter().map(|job| &job.name));
+        self.job_list.set_value_single(sel_index);
+    }
+
+    fn add_new_job(&mut self) {
+        self.jobs.push(Job {
+            name: "Unnamed".into(),
+            parallel_copies: 2,
+        });
+        self.update_job_list();
+        self.job_list.set_value_single(Some(self.jobs.len() - 1));
+        self.update_job_page();
+    }
+}
+
 const NAME_VISIBLE_COLUMNS: u32 = 15;
 
 #[derive(Clone)]
-struct MainWindow(Rc<MainWindowData>);
+struct MainWindow(Rc<RefCell<MainWindowInner>>);
 
 impl MainWindow {
     pub fn new() -> Self {
@@ -86,42 +158,42 @@ impl MainWindow {
         dialog.append(&main_page).expect("failed to build the window");
         dialog.set_title("Mirror Sync");
 
-        let main_window_zyg = MainWindow(Rc::new(MainWindowData {
-            jobs: RefCell::new(vec![]),
+        let job_list_tmp = job_list.clone();
+        let job_page_tmp = job_page.clone();
+        let main_window_zyg = MainWindow(Rc::new(RefCell::new(MainWindowInner {
+            jobs: vec![],
             dialog: dialog,
-            job_list: job_list,
-            job_page: job_page,
-        }));
+            job_list: job_list_tmp,
+            job_page: job_page_tmp,
+        })));
 
         let main_window = main_window_zyg.clone();
-        main_window_zyg.0.job_list.action_event().add(move |_: &ListActionArgs|
-            main_window.update_job_page()
+        job_list.action_event().add(move |_: &ListActionArgs|
+            main_window.0.borrow().update_job_page()
         );
         let main_window = main_window_zyg.clone();
-        add_job_button.action_event().add(move || main_window.add_new_job());
+        add_job_button.action_event().add(move || main_window.0.borrow_mut().add_new_job());
 
         let main_window = main_window_zyg.clone();
-        main_window_zyg.0.job_page.name_text_box.value_changed_event().add(move || {
-            if let Some(sel_index) = main_window.0.job_list.value_single() {
-                {
-                    let mut jobs = main_window.0.jobs.borrow_mut();
-                    jobs[sel_index].name = main_window.0.job_page.name_text_box.value();
-                }
-                main_window.update_job_list();
+        job_page.name_text_box.value_changed_event().add(move || {
+            let mut inner = main_window.0.borrow_mut();
+            if let Some(sel_index) = inner.job_list.value_single() {
+                inner.jobs[sel_index].name = inner.job_page.name_text_box.value();
+                inner.update_job_list();
             };
-            main_window.save_jobs();
+            inner.save_jobs();
         });
 
         let main_window = main_window_zyg.clone();
-        main_window_zyg.0.job_page.parallel_copies_text_box.value_changed_event().add(move || {
-            if let Some(sel_index) = main_window.0.job_list.value_single() {
-                let mut jobs = main_window.0.jobs.borrow_mut();
-                let parallel_str = main_window.0.job_page.parallel_copies_text_box.value();
+        job_page.parallel_copies_text_box.value_changed_event().add(move || {
+            let mut inner = main_window.0.borrow_mut();
+            if let Some(sel_index) = inner.job_list.value_single() {
+                let parallel_str = inner.job_page.parallel_copies_text_box.value();
                 if let Ok(parallel_copies) = parallel_str.parse::<u8>() {
-                    jobs[sel_index].parallel_copies = parallel_copies;
+                    inner.jobs[sel_index].parallel_copies = parallel_copies;
                 }
             };
-            main_window.save_jobs();
+            inner.save_jobs();
         });
 
         main_window_zyg
@@ -204,85 +276,10 @@ impl MainWindow {
         }
     }
 
-    fn save_jobs(&self) {
-        // TODO: I should create a timer and just start it here. When the timer goes off,
-        // it actually saves the jobs.
-        let jobs = self.0.jobs.borrow();
-        let settings_dir = match app_dirs::get_data_root(app_dirs::AppDataType::UserData) {
-            Ok(dir) => dir,
-            Err(err) => {
-                println!("failed to get directory to save jobs: {}", err);
-                // TODO: should show dialog
-                return;
-            },
-        };
-        let app_settings_dir = settings_dir.join("MirrorSync");
-        if let Err(err) = fs::create_dir_all(&app_settings_dir) {
-            println!("failed to create directory to save jobs: {}", err);
-            // TODO: should show dialog
-            return;
-        }
-
-        let json = ObjectBuilder::new()
-            .insert_array("jobs", |mut builder| {
-                for job in jobs.iter() {
-                    builder = builder.push_object(|job_builder| {
-                        job_builder
-                            .insert("name", &job.name)
-                            .insert("parallel_copies", job.parallel_copies)
-                    });
-                }
-                builder
-            })
-            .build();
-        let mut file = match File::create(&app_settings_dir.join("settings.json")) {
-            Ok(file) => file,
-            Err(err) => {
-                println!("failed to create file to save jobs: {}", err);
-                // TODO: should show dialog
-                return;
-            },
-        };
-        if let Err(err) = serde_json::ser::to_writer_pretty(&mut file, &json) {
-            println!("failed to save jobs: {}", err);
-            // TODO: should show dialog
-            return;
-        }
+    pub fn dialog(&self) -> Dialog {
+        self.0.borrow().dialog.clone()
     }
 
-    pub fn dialog(&self) -> &Dialog {
-        &self.0.dialog
-    }
-
-    fn update_job_page(&self) {
-        let sel_index = self.0.job_list.value_single();
-        if let Some(sel_index) = sel_index {
-            let jobs = self.0.jobs.borrow();
-            self.0.job_page.name_text_box.set_value(&jobs[sel_index].name);
-            self.0.job_page.parallel_copies_text_box.set_value(&jobs[sel_index].parallel_copies.to_string());
-        }
-    }
-
-    fn update_job_list(&self) {
-        let sel_index = self.0.job_list.value_single();
-        let jobs = self.0.jobs.borrow();
-        self.0.job_list.set_items(jobs.iter().map(|job| &job.name));
-        self.0.job_list.set_value_single(sel_index);
-    }
-
-    fn add_new_job(&self) {
-        {
-            let mut jobs = self.0.jobs.borrow_mut();
-            jobs.push(Job {
-                name: "Unnamed".into(),
-                parallel_copies: 2,
-            });
-        }
-        self.update_job_list();
-        // TODO: I hate all this RefCell borrowing. I need to figure out a pattern to reduce it.
-        self.0.job_list.set_value_single(Some(self.0.jobs.borrow().len() - 1));
-        self.update_job_page();
-    }
 }
 
 fn main() {
@@ -291,12 +288,14 @@ fn main() {
     //          .add_directory_pair(PathBuf::from(r"C:\Files"), PathBuf::from(r"D:\Backup"))
     //          .filter(|path| path != Path::new(r"C:\Files\Dev"))
     //          .sync();
+
     // let op = SyncBuilder::new()
     //          .parallel_copies(10)
     //          .add_directory_pair(PathBuf::from(r"C:\Songs"), PathBuf::from(r"\\SHINYONE\Users\Dan\Music\Songs"))
     //          .add_directory_pair(PathBuf::from(r"C:\Songs DL"), PathBuf::from(r"\\SHINYONE\Users\Dan\Music\Songs DL"))
     //          .filter(|path| path.extension().map_or(true, |ext| ext != "wav"))
     //          .sync();
+
     // while !op.is_done() {
     //     while let Some(entry) = op.read_log() {
     //         println!("{:?} {:?} {}", entry.time, entry.level, entry.message);
