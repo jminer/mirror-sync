@@ -62,6 +62,21 @@ struct JobPageData {
     control: Vbox,
     name_text_box: Text,
     parallel_copies_text_box: Text,
+    copy_if_size_mismatched_checkbox: Toggle,
+    copy_if_modified_mismatched_checkbox: Toggle,
+    copy_created_checkbox: Toggle,
+    copy_modified_checkbox: Toggle,
+
+    folder_list: List,
+    source_dir_text_box: Text,
+    dest_dir_text_box: Text,
+    add_dirs_button: Button,
+    delete_dirs_button: Button,
+
+    blacklist: List,
+    blacklist_text_box: Text,
+    blacklist_add_button: Button,
+    blacklist_delete_button: Button,
 }
 
 struct MainWindowInner {
@@ -114,6 +129,32 @@ impl MainWindowInner {
                                                       .and_then(|val| val.as_u64()) {
                     job.parallel_copies = parallel_copies as u8;
                 }
+                if let Some(&JsonValue::Bool(b)) = job_obj.find("copy_contents_if_date_mismatched") {
+                    job.copy_contents_if_date_mismatched = b;
+                }
+                if let Some(&JsonValue::Bool(b)) = job_obj.find("copy_contents_if_size_mismatched") {
+                    job.copy_contents_if_size_mismatched = b;
+                }
+                if let Some(&JsonValue::Bool(b)) = job_obj.find("copy_created_date") {
+                    job.copy_created_date = b;
+                }
+                if let Some(&JsonValue::Bool(b)) = job_obj.find("copy_modified_date") {
+                    job.copy_modified_date = b;
+                }
+                if let Some(&JsonValue::Array(ref pair_arr)) = job_obj.find("directories") {
+                    let mut dirs = vec![];
+                    for pair_obj in pair_arr {
+                        let src = pair_obj.find("source");
+                        let dest = pair_obj.find("destination");
+                        if let (Some(&JsonValue::String(ref src)),
+                                Some(&JsonValue::String(ref dest))) = (src, dest) {
+                            dirs.push((PathBuf::from(src), PathBuf::from(dest)));
+                        }
+                    }
+                    job.directories = dirs;
+                }
+            // TODO:
+            // blacklist: vec![],
                 jobs.push(job);
             }
         }
@@ -147,6 +188,21 @@ impl MainWindowInner {
                         job_builder
                             .insert("name", &job.name)
                             .insert("parallel_copies", job.parallel_copies)
+                            .insert("copy_contents_if_date_mismatched", job.copy_contents_if_date_mismatched)
+                            .insert("copy_contents_if_size_mismatched", job.copy_contents_if_size_mismatched)
+                            .insert("copy_created_date", job.copy_created_date)
+                            .insert("copy_modified_date", job.copy_modified_date)
+                            .insert_array("directories", |mut dir_arr_builder| {
+                                for dir in &job.directories {
+                                    dir_arr_builder = dir_arr_builder.push_object(|mut dir_pair_builder| {
+                                        dir_pair_builder.insert("source", &dir.0)
+                                                        .insert("destination", &dir.1)
+                                    });
+                                }
+                                dir_arr_builder
+                            })
+            // TODO:
+            // blacklist: vec![],
                     });
                 }
                 builder
@@ -170,11 +226,22 @@ impl MainWindowInner {
     }
 
     fn update_job_page(&self) {
-        let sel_index = self.job_list.value_single();
-        if let Some(sel_index) = sel_index {
-            self.job_page.name_text_box.set_value(&self.jobs[sel_index].name);
-            self.job_page.parallel_copies_text_box.set_value(&self.jobs[sel_index].parallel_copies.to_string());
-        }
+        let sel_index = if let Some(index) = self.job_list.value_single() {
+            index
+        } else {
+            return;
+        };
+        self.job_page.name_text_box.set_value(&self.jobs[sel_index].name);
+        self.job_page.parallel_copies_text_box.set_value(&self.jobs[sel_index].parallel_copies.to_string());
+        self.job_page.copy_if_size_mismatched_checkbox.set_on(
+            self.jobs[sel_index].copy_contents_if_size_mismatched);
+        self.job_page.copy_if_modified_mismatched_checkbox.set_on(
+            self.jobs[sel_index].copy_contents_if_date_mismatched);
+        self.job_page.copy_created_checkbox.set_on(self.jobs[sel_index].copy_created_date);
+        self.job_page.copy_modified_checkbox.set_on(self.jobs[sel_index].copy_modified_date);
+        self.job_page.folder_list.set_items(self.jobs[sel_index].directories.iter().map(|dir| {
+            format!("{} -> {}", dir.0.to_string_lossy(), dir.1.to_string_lossy())
+        }));
     }
 
     fn update_job_list(&self) {
@@ -276,6 +343,68 @@ impl MainWindow {
             }
         });
 
+        let main_window = main_window_zyg.clone();
+        job_page.copy_if_size_mismatched_checkbox.action_event().add(move |checked| {
+            let mut inner = main_window.0.borrow_mut();
+            if let Some(sel_index) = inner.job_list.value_single() {
+                inner.jobs[sel_index].copy_contents_if_size_mismatched = checked;
+                inner.save_jobs();
+            }
+        });
+
+        let main_window = main_window_zyg.clone();
+        job_page.copy_if_modified_mismatched_checkbox.action_event().add(move |checked| {
+            let mut inner = main_window.0.borrow_mut();
+            if let Some(sel_index) = inner.job_list.value_single() {
+                inner.jobs[sel_index].copy_contents_if_date_mismatched = checked;
+                inner.save_jobs();
+            }
+        });
+
+        let main_window = main_window_zyg.clone();
+        job_page.copy_created_checkbox.action_event().add(move |checked| {
+            let mut inner = main_window.0.borrow_mut();
+            if let Some(sel_index) = inner.job_list.value_single() {
+                inner.jobs[sel_index].copy_created_date = checked;
+                inner.save_jobs();
+            }
+        });
+
+        let main_window = main_window_zyg.clone();
+        job_page.copy_modified_checkbox.action_event().add(move |checked| {
+            let mut inner = main_window.0.borrow_mut();
+            if let Some(sel_index) = inner.job_list.value_single() {
+                inner.jobs[sel_index].copy_modified_date = checked;
+                inner.save_jobs();
+            }
+        });
+
+        let main_window = main_window_zyg.clone();
+        job_page.add_dirs_button.action_event().add(move || {
+            let mut inner = main_window.0.borrow_mut();
+            if let Some(sel_index) = inner.job_list.value_single() {
+                let src = inner.job_page.source_dir_text_box.value();
+                let dest = inner.job_page.dest_dir_text_box.value();
+                inner.jobs[sel_index].directories.push((PathBuf::from(src), PathBuf::from(dest)));
+                inner.job_page.source_dir_text_box.set_value("");
+                inner.job_page.dest_dir_text_box.set_value("");
+                inner.update_job_page();
+                inner.save_jobs();
+            }
+        });
+
+        let main_window = main_window_zyg.clone();
+        job_page.delete_dirs_button.action_event().add(move || {
+            let mut inner = main_window.0.borrow_mut();
+            if let Some(sel_index) = inner.job_list.value_single() {
+                if let Some(sel_dir_index) = inner.job_page.folder_list.value_single() {
+                    inner.jobs[sel_index].directories.remove(sel_dir_index);
+                    inner.update_job_page();
+                    inner.save_jobs();
+                }
+            }
+        });
+
         main_window_zyg.0.borrow_mut().load_jobs();
 
         main_window_zyg
@@ -354,6 +483,21 @@ impl MainWindow {
         JobPageData {
             name_text_box: name_text_box,
             parallel_copies_text_box: parallel_copies_text_box,
+            copy_if_size_mismatched_checkbox: copy_if_size_mismatched_checkbox,
+            copy_if_modified_mismatched_checkbox: copy_if_modified_mismatched_checkbox,
+            copy_created_checkbox: copy_created_checkbox,
+            copy_modified_checkbox: copy_modified_checkbox,
+
+            folder_list: folder_list,
+            source_dir_text_box: source_dir_text_box,
+            dest_dir_text_box: dest_dir_text_box,
+            add_dirs_button: add_dirs_button,
+            delete_dirs_button: delete_dirs_button,
+
+            blacklist: blacklist,
+            blacklist_text_box: blacklist_text_box,
+            blacklist_add_button: blacklist_add_button,
+            blacklist_delete_button: blacklist_delete_button,
             control: page,
         }
     }
