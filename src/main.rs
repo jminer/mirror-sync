@@ -13,6 +13,7 @@ extern crate winapi;
 extern crate kernel32;
 
 use std::cell::RefCell;
+use std::cmp::min;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
 use std::rc::Rc;
@@ -247,7 +248,9 @@ impl MainWindowInner {
     fn update_job_list(&self) {
         let sel_index = self.job_list.value_single();
         self.job_list.set_items(self.jobs.iter().map(|job| &job.name));
-        self.job_list.set_value_single(sel_index);
+        if !self.jobs.is_empty() {
+            self.job_list.set_value_single(sel_index.map(|i| min(i, self.jobs.len() - 1)));
+        }
     }
 
     fn add_new_job(&mut self) {
