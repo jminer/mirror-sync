@@ -2,6 +2,8 @@
 name = "mirror-sync"
 version = "0.1.0"
 authors = ["Jordan Miner <jminer7@gmail.com>"]
+repository = "https://github.com/jminer/mirror-sync"
+license = "GPL-3.0-only"
 
 [dependencies]
 app_dirs = "1.1"
