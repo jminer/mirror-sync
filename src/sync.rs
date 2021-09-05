@@ -1,9 +1,10 @@
 
+use std::cmp::{self, Ordering};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Debug};
-use std::fs::{self, File};
-use std::io;
+use std::fs::{self, File, Metadata};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{PathBuf, Path};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -17,9 +18,12 @@ pub struct SyncBuilder {
     parallel_copies: u8,
     copy_contents_if_date_mismatched: bool,
     copy_contents_if_size_mismatched: bool,
+    // Compares the first X bytes and last X bytes of the file and copies the file if they don't
+    // match. Set to zero to turn off.
+    copy_contents_if_start_end_mismatched_size: u32,
     copy_contents_if_contents_mismatched: bool, // TODO: currently ignored
-    copy_created_date: bool,
-    copy_modified_date: bool,
+    copy_created_date: bool,   // TODO: currently ignored
+    copy_modified_date: bool,   // TODO: currently ignored
     directories: Vec<(PathBuf, PathBuf)>,
     filter: Option<Arc<Fn(&Path) -> bool + Send + Sync>>,
 }
@@ -30,6 +34,7 @@ impl SyncBuilder {
             parallel_copies: 1,
             copy_contents_if_date_mismatched: false,
             copy_contents_if_size_mismatched: true,
+            copy_contents_if_start_end_mismatched_size: 8 * 1024,
             copy_contents_if_contents_mismatched: false,
             copy_created_date: true,
             copy_modified_date: true,
@@ -50,6 +55,11 @@ impl SyncBuilder {
 
     pub fn copy_contents_if_size_mismatched(&mut self, value: bool) -> &mut Self {
         self.copy_contents_if_size_mismatched = value;
+        self
+    }
+
+    pub fn copy_contents_if_start_end_mismatched_size(&mut self, value: u32) -> &mut Self {
+        self.copy_contents_if_start_end_mismatched_size = value;
         self
     }
 
@@ -101,6 +111,7 @@ impl Debug for SyncBuilder {
             .field("parallel_copies", &self.parallel_copies)
             .field("copy_contents_if_date_mismatched", &self.copy_contents_if_date_mismatched)
             .field("copy_contents_if_size_mismatched", &self.copy_contents_if_size_mismatched)
+            .field("copy_contents_if_start_end_mismatched_size", &self.copy_contents_if_start_end_mismatched_size)
             .field("copy_contents_if_contents_mismatched", &self.copy_contents_if_contents_mismatched)
             .field("copy_created_date", &self.copy_created_date)
             .field("copy_modified_date", &self.copy_modified_date)
@@ -192,8 +203,8 @@ impl SyncOperation {
         loop {
             if let Some(op) = self.0.op_queue.try_pop() {
                 match op {
-                    IoOperation::CopyFile(ref src, ref dest) => {
-                        self.copy_file(src, dest);
+                    IoOperation::CopyFileIfNeeded(data) => {
+                        self.copy_file_if_needed(data);
                     },
                     IoOperation::DeleteDirAll(ref dir) => {
                         if let Err(err) = fs::remove_dir_all(dir) {
@@ -327,58 +338,45 @@ impl SyncOperation {
                         let dest_meta = dest_entry.map(|entry|
                             entry.metadata()
                         );
-                        let should_copy = match dest_meta {
-                            Some(Ok(dest_meta)) => {
-                                if dest_meta.is_dir() {
-                                    self.add_to_op_queue(IoOperation::DeleteDirAll(dest_path.clone()));
-                                    true
-                                } else if dest_meta.is_file() {
-                                    // Compare the modified date and size, depending on settings.
-                                    let src_modified = match src_meta.modified() {
-                                        Ok(modified) => modified,
-                                        Err(err) => {
-                                            self.log(SyncLogLevel::Error,
-                                                     format!("Failed to get modified date of {}: {}",
-                                                     src_path.to_string_lossy(), err.description()));
-                                            continue;
-                                        },
-                                    };
-                                    let dest_modified = match dest_meta.modified() {
-                                        Ok(modified) => modified,
-                                        Err(err) => {
-                                            self.log(SyncLogLevel::Error,
-                                                     format!("Failed to get modified date of {}: {}",
-                                                     dest_path.to_string_lossy(), err.description()));
-                                            continue;
-                                        },
-                                    };
-                                    if self.0.options.copy_contents_if_date_mismatched &&
-                                       src_modified != dest_modified {
-                                        true
-                                    } else if self.0.options.copy_contents_if_size_mismatched &&
-                                              src_meta.len() != dest_meta.len() {
-                                        true
-                                    } else {
-                                        false
-                                    }
+                        let dest_meta = match dest_meta {
+                            Some(Err(ref err)) => {
+                                if err.kind() == io::ErrorKind::NotFound {
+                                    None
                                 } else {
-                                    false // TODO: delete symlink?
-                                }
-                            },
-                            Some(Err(err)) => {
-                                if err.kind() != io::ErrorKind::NotFound {
                                     self.log(SyncLogLevel::Error,
                                              format!("Failed to read information about {}: {}",
                                              dest_path.to_string_lossy(), err.description()));
                                     continue;
                                 }
-                                // The file has been deleted since the directory listing.
-                                true
+                            }
+                            Some(Ok(meta)) => Some(meta),
+                            None => None,
+                        };
+                        // TODO: this can probably be simplified now or especially once symlinks are
+                        // deleted
+                        let should_copy = match dest_meta {
+                            Some(ref dest_meta) => {
+                                if dest_meta.is_dir() {
+                                    self.add_to_op_queue(IoOperation::DeleteDirAll(dest_path.clone()));
+                                    true
+                                } else if dest_meta.is_file() {
+                                    true
+                                } else {
+                                    self.log(SyncLogLevel::Info,
+                                             format!("Skipping file due to symlink at destination: {}",
+                                             src_path.to_string_lossy()));
+                                    false // TODO: delete symlink?
+                                }
                             },
                             None => true, // The file is not in the destination.
                         };
                         if should_copy {
-                            self.add_to_op_queue(IoOperation::CopyFile(src_path, dest_path));
+                            self.add_to_op_queue(IoOperation::CopyFileIfNeeded(CopyFileIfNeededData {
+                                src: src_path,
+                                dest: dest_path,
+                                src_meta,
+                                dest_meta,
+                            }));
                         }
                     }
                 },
@@ -436,12 +434,185 @@ impl SyncOperation {
         }
     }
 
+    fn compare_start_end_equal(&self, data: &CopyFileIfNeededData) -> Result<bool, ()> {
+        let mut src_file = match File::open(&data.src) {
+            Ok(file) => file,
+            Err(err) => {
+                self.log(SyncLogLevel::Error,
+                         format!("Failed to open {}: {}",
+                         data.src.to_string_lossy(), err.description()));
+                return Err(());
+            },
+        };
+        let mut dest_file = match File::open(&data.dest) {
+            Ok(file) => file,
+            Err(_) => {
+                return Err(());
+            },
+        };
+
+        let mut compare_size = self.0.options.copy_contents_if_start_end_mismatched_size as u64;
+        compare_size = cmp::min(compare_size, data.src_meta.len());
+        if let Some(ref dest_meta) = data.dest_meta {
+            compare_size = cmp::min(compare_size, dest_meta.len());
+        }
+        let compare_size = compare_size as usize;
+
+        let mut src_buffer = Vec::new();
+        src_buffer.resize(compare_size, 0);
+        let mut dest_buffer = Vec::new();
+        dest_buffer.resize(compare_size, 0);
+
+        match src_file.read_exact(&mut src_buffer) {
+            Ok(size) => size,
+            Err(err) => {
+                self.log(SyncLogLevel::Error,
+                         format!("Failed to read {}: {}",
+                         data.src.to_string_lossy(), err.description()));
+                         return Err(());
+            }
+        };
+        match dest_file.read_exact(&mut dest_buffer) {
+            Ok(size) => size,
+            Err(_) => {
+                return Err(());
+            }
+        };
+
+        if src_buffer != dest_buffer {
+            return Ok(false);
+        }
+
+        if let Err(err) = src_file.seek(SeekFrom::End(-(compare_size as i64))) {
+            self.log(SyncLogLevel::Error,
+                     format!("Failed to seek {}: {}",
+                     data.src.to_string_lossy(), err.description()));
+            return Err(());
+        }
+        if let Err(_) = dest_file.seek(SeekFrom::End(-(compare_size as i64))) {
+            return Err(());
+        }
+
+        match src_file.read_exact(&mut src_buffer) {
+            Ok(size) => size,
+            Err(err) => {
+                self.log(SyncLogLevel::Error,
+                         format!("Failed to seek {}: {}",
+                         data.src.to_string_lossy(), err.description()));
+                return Err(());
+            }
+        };
+        match dest_file.read_exact(&mut dest_buffer) {
+            Ok(size) => size,
+            Err(_) => {
+                return Err(());
+            }
+        };
+
+        if src_buffer != dest_buffer {
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    fn should_copy_file(&self, data: &CopyFileIfNeededData) -> CopyReason {
+        // Compare the modified date and size, depending on settings.
+        let src_modified = match data.src_meta.modified() {
+            Ok(modified) => modified,
+            Err(err) => {
+                self.log(SyncLogLevel::Error,
+                         format!("Failed to get modified date of {}: {}",
+                         data.src.to_string_lossy(), err.description()));
+                return CopyReason::DateMismatched;
+            },
+        };
+        let dest_meta = match data.dest_meta {
+            Some(ref meta) => meta,
+            None => return CopyReason::Missing,
+        };
+        let dest_modified = match dest_meta.modified() {
+            Ok(modified) => modified,
+            Err(err) => {
+                self.log(SyncLogLevel::Error,
+                         format!("Failed to get modified date of {}: {}",
+                         data.dest.to_string_lossy(), err.description()));
+                return CopyReason::DateMismatched;
+            },
+        };
+        if self.0.options.copy_contents_if_date_mismatched &&
+           src_modified != dest_modified
+        {
+            CopyReason::DateMismatched
+        } else if self.0.options.copy_contents_if_size_mismatched &&
+            data.src_meta.len() != dest_meta.len()
+        {
+            CopyReason::SizeMismatched
+        } else if self.0.options.copy_contents_if_start_end_mismatched_size > 0 &&
+            !self.compare_start_end_equal(&data).unwrap_or(false)
+        {
+            CopyReason::StartEndMismatched
+        } else {
+            CopyReason::None
+        }
+    }
+
+    fn copy_file_if_needed(&self, data: CopyFileIfNeededData) {
+        let copy_reason = self.should_copy_file(&data);
+        if copy_reason == CopyReason::None {
+            return;
+        }
+
+        let mut src_file = match File::open(&data.src) {
+            Ok(file) => file,
+            Err(err) => {
+                self.log(SyncLogLevel::Error,
+                         format!("Failed to open {}: {}",
+                         data.src.to_string_lossy(), err.description()));
+                return;
+            },
+        };
+        let mut dest_file = match File::create(&data.dest) {
+            Ok(file) => file,
+            Err(err) => {
+                self.log(SyncLogLevel::Error,
+                         format!("Failed to open {}: {}",
+                         data.dest.to_string_lossy(), err.description()));
+                return;
+            },
+        };
+
+        self.log(SyncLogLevel::Info,
+            format!("{:?}: Starting to copy {}", copy_reason, data.src.to_string_lossy()));
+        if let Err(err) = io::copy(&mut src_file, &mut dest_file) {
+            self.log(SyncLogLevel::Error,
+                     format!("Failed to copy {}: {}",
+                     data.src.to_string_lossy(), err.description()));
+        }
+    }
+
 }
+
+struct CopyFileIfNeededData {
+        pub src: PathBuf,
+        pub dest: PathBuf,
+        pub src_meta: Metadata,
+        pub dest_meta: Option<Metadata>,
+    }
 
 enum IoOperation {
     DeleteDirAll(PathBuf),
     DeleteFile(PathBuf),
-    CopyFile(PathBuf, PathBuf),
+    CopyFileIfNeeded(CopyFileIfNeededData),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopyReason {
+    Missing,
+    DateMismatched,
+    SizeMismatched,
+    StartEndMismatched,
+    None,
 }
 
 
