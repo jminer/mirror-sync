@@ -19,7 +19,7 @@ use std::io::{BufReader, BufWriter};
 use std::rc::Rc;
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clear_coat::*;
 use clear_coat::common_attrs_cbs::*;
@@ -27,6 +27,8 @@ use serde_json::Value as JsonValue;
 use serde_json::builder::{ArrayBuilder, ObjectBuilder};
 
 use sync::SyncBuilder;
+
+use crate::sync::SyncOperation;
 
 #[cfg_attr(windows, path = "windows_file_times.rs")]
 mod file_times;
@@ -512,6 +514,8 @@ impl MainWindow {
 }
 
 fn main() {
+    // let start = Instant::now();
+
     // let op = SyncBuilder::new()
     //          .parallel_copies(1)
     //          .add_directory_pair(PathBuf::from(r"C:\Files"), PathBuf::from(r"D:\Backup"))
@@ -525,12 +529,17 @@ fn main() {
     //          .filter(|path| path.extension().map_or(true, |ext| ext != "wav"))
     //          .sync();
 
-    // while !op.is_done() {
+    // fn print_log(start: Instant, op: &SyncOperation) {
     //     while let Some(entry) = op.read_log() {
-    //         println!("{:?} {:?} {}", entry.time, entry.level, entry.message);
+    //         println!("{:?}s {:?}: {}", (entry.time - start).as_secs_f32(), entry.level, entry.message);
     //     }
+    // }
+
+    // while !op.is_done() {
+    //     print_log(start, &op);
     //     thread::sleep(Duration::from_millis(100));
     // }
+    // print_log(start, &op);
     // return;
 
     let win = MainWindow::new();
