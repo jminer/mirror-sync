@@ -518,7 +518,7 @@ fn main() {
 
     // let op = SyncBuilder::new()
     //          .parallel_copies(1)
-    //          .add_directory_pair(PathBuf::from(r"C:\Files"), PathBuf::from(r"D:\Backup"))
+    //          .add_directory_pair(PathBuf::from(r"C:\Files"), PathBuf::from(r"J:\Backup\Files"))
     //          .filter(|path| path != Path::new(r"C:\Files\Dev"))
     //          .sync();
 
@@ -527,6 +527,22 @@ fn main() {
     //          .add_directory_pair(PathBuf::from(r"C:\Songs"), PathBuf::from(r"\\SHINYONE\Users\Dan\Music\Songs"))
     //          .add_directory_pair(PathBuf::from(r"C:\Songs DL"), PathBuf::from(r"\\SHINYONE\Users\Dan\Music\Songs DL"))
     //          .filter(|path| path.extension().map_or(true, |ext| ext != "wav"))
+    //          .sync();
+
+    // let op = SyncBuilder::new()
+    //          .parallel_copies(1)
+    //          .add_directory_pair(
+    //              PathBuf::from(r"E:\Downloads"),
+    //              PathBuf::from(r"J:\Backup - 3 TB\Downloads"))
+    //          .add_directory_pair(
+    //              PathBuf::from(r"E:\VMs"),
+    //              PathBuf::from(r"J:\Backup - 3 TB\VMs"))
+    //          .add_directory_pair(
+    //              PathBuf::from(r"C:\Users\Jordan\VirtualBox VMs"),
+    //              PathBuf::from(r"J:\Backup\SSD VMs"))
+    //          .add_directory_pair(
+    //              PathBuf::from(r"E:\Songs WAV"),
+    //              PathBuf::from(r"J:\Backup - 3 TB\Songs WAV"))
     //          .sync();
 
     // fn print_log(start: Instant, op: &SyncOperation) {
